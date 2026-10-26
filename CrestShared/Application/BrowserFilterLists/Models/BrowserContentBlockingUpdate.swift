@@ -23,7 +23,7 @@ struct BrowserContentBlockingUpdate {
         state.policiesBySpaceID[spaceID] ?? .off
     }
 
-    func activation(for spaceID: UUID, isPresented: Bool) -> BrowserContentRuleListActivation {
+    func activation(for spaceID: UUID, isPresented: Bool) -> BrowserContentBlockingActivation {
         isPresented && changedSpaceIDs.contains(spaceID) ? .immediately : .onNextNavigation
     }
 }

@@ -1077,11 +1077,6 @@ struct AwaitDownloadApproval: Intent, DownloadIntent, Equatable, Sendable {
     let downloadID: UUID
 }
 
-struct BalancedProtectionRules: Query, Equatable, Sendable {
-    typealias Answer = ContentRuleList
-
-}
-
 struct BeforeUnloadAnswered: EngineEvent, Equatable, Sendable {
     let pageID: UUID
     let proceeds: Bool
@@ -1576,11 +1571,6 @@ struct ContentMessagePosted: Equatable, Sendable {
     let handler: String
     let body: String
     let frame: ContentFrame
-}
-
-struct ContentRuleList: Equatable, Sendable {
-    let identifier: String
-    let source: String
 }
 
 struct ContentScriptEvaluated: Equatable, Sendable {
@@ -7160,7 +7150,6 @@ struct ContentBlockingPolicy: Hashable, Sendable {
     var name: String { facts.name }
     var title: LocalizedStringResource { facts.title }
     var switchTitle: LocalizedStringResource { facts.switchTitle }
-    var identifier: String? { facts.identifier }
     var blocksContent: Bool { facts.blocksContent }
     private let facts: Facts
 
@@ -7169,33 +7158,24 @@ struct ContentBlockingPolicy: Hashable, Sendable {
         name: String,
         title: LocalizedStringResource,
         switchTitle: LocalizedStringResource,
-        identifier: String?,
         blocksContent: Bool
     ) {
         self.tag = tag
-        facts = Facts(
-            name: name,
-            title: title,
-            switchTitle: switchTitle,
-            identifier: identifier,
-            blocksContent: blocksContent
-        )
+        facts = Facts(name: name, title: title, switchTitle: switchTitle, blocksContent: blocksContent)
     }
 
     static let balanced = ContentBlockingPolicy(
         tag: 0,
         name: "balanced",
-        title: LocalizedStringResource("Balanced"),
+        title: LocalizedStringResource("On"),
         switchTitle: LocalizedStringResource("Turn Off Content Blocking in This Space"),
-        identifier: "com.pauldavis.crest.content-blocking.balanced.v4.234d194f4eb81ebe716319b28fc7db88fb0946c622a6071592bd016d0c5ddf36",
         blocksContent: true
     )
     static let off = ContentBlockingPolicy(
         tag: 1,
         name: "off",
         title: LocalizedStringResource("Off"),
-        switchTitle: LocalizedStringResource("Turn On Balanced Content Blocking in This Space"),
-        identifier: nil,
+        switchTitle: LocalizedStringResource("Turn On Content Blocking in This Space"),
         blocksContent: false
     )
 
@@ -7217,20 +7197,12 @@ struct ContentBlockingPolicy: Hashable, Sendable {
         let name: String
         let title: LocalizedStringResource
         let switchTitle: LocalizedStringResource
-        let identifier: String?
         let blocksContent: Bool
 
-        init(
-            name: String,
-            title: LocalizedStringResource,
-            switchTitle: LocalizedStringResource,
-            identifier: String?,
-            blocksContent: Bool
-        ) {
+        init(name: String, title: LocalizedStringResource, switchTitle: LocalizedStringResource, blocksContent: Bool) {
             self.name = name
             self.title = title
             self.switchTitle = switchTitle
-            self.identifier = identifier
             self.blocksContent = blocksContent
         }
     }

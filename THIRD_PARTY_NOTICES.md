@@ -8,6 +8,8 @@ Crest ships these third-party runtime components:
 | [.NET runtime](https://github.com/dotnet/runtime) (Native AOT) | 10.0.5 | Crest's core, compiled ahead of time into every app | MIT, with bundled third-party notices |
 | [Chromium](https://www.chromium.org/), built with [ungoogled-chromium-macos](https://github.com/ungoogled-software/ungoogled-chromium-macos) | 152.0.7977.82 | The Chromium engine in Crest's Chromium build for macOS | BSD-3-Clause, with bundled third-party licenses |
 
+| [uBlock Origin Lite](https://github.com/uBlockOrigin/uBOL-home) | 2026.1026.1812 | WebKit ad and tracker blocking | GPL-3.0-or-later, with bundled third-party and filter-list notices |
+
 The complete notices are preserved in
 [`ThirdParty/Sparkle-LICENSE.txt`](ThirdParty/Sparkle-LICENSE.txt),
 [`ThirdParty/DotNet-LICENSE.txt`](ThirdParty/DotNet-LICENSE.txt) and
@@ -20,6 +22,10 @@ Crest's emoji picker catalog is generated from the official
 [Unicode Emoji 17.0 test data](https://www.unicode.org/Public/17.0.0/emoji/emoji-test.txt).
 The Unicode data notice is preserved in
 [`ThirdParty/Unicode-LICENSE.txt`](ThirdParty/Unicode-LICENSE.txt).
+
+The GitHub dashboard integration adapts response formats and selectors from
+[Zen Browser](https://github.com/zen-browser/desktop/blob/2ad194525da74d7f00609a424d93a3c7db430d21/src/zen/live-folders/providers/GithubLiveFolder.sys.mjs),
+under the Mozilla Public License 2.0, preserved in [`LICENSE`](LICENSE).
 
 Beyond these, the apps link only Apple platform frameworks supplied by the macOS
 and iOS SDKs: AuthenticationServices, CloudKit, LocalAuthentication, Security,
@@ -58,3 +64,12 @@ project documentation identify the MIT license. The repository license audit
 records those exceptions explicitly.
 
 Third-party names and logos remain the property of their respective owners.
+
+## uBlock Origin Lite
+
+The modified extension source and its dependency notices are bundled in
+`CrestShared/Resources/uBlockOriginLite.zip`. Its license is also preserved in
+[`uBlockOriginLite-LICENSE.txt`](CrestShared/Resources/uBlockOriginLite-LICENSE.txt).
+`Scripts/update-ublock-origin-lite.py` documents and reproduces Crest’s runtime
+adaptation, Complete filtering, EasyList Spanish selection, and startup messages.
+The upstream release and archive hashes are recorded beside the bundle.

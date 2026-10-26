@@ -88,10 +88,16 @@ extension MobileBrowserPage: WKNavigationDelegate {
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
-        navigationDecider.decision(
-            for: navigationAction,
-            isAppInitiated: isAppInitiated(navigationAction)
-        ).apply(to: self, for: navigationAction, in: webView, decisionHandler: decisionHandler)
+        webKitPage.prepareNavigation { [weak self] allowed in
+            guard let self, allowed else {
+                decisionHandler(.cancel)
+                return
+            }
+            navigationDecider.decision(
+                for: navigationAction,
+                isAppInitiated: isAppInitiated(navigationAction)
+            ).apply(to: self, for: navigationAction, in: webView, decisionHandler: decisionHandler)
+        }
     }
 
     func webView(

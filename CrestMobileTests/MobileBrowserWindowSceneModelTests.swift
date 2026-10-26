@@ -30,7 +30,7 @@ final class MobileBrowserWindowSceneModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let core = try CrestCore(configuration: AppConfiguration(storageDirectory: directory.path))
         core.engines.register(
-            WebKitEngineBinding(profileStores: WebKitBrowserWebsiteDataStoreRemover(), contentRuleLists: nil),
+            WebKitEngineBinding(profileStores: WebKitBrowserWebsiteDataStoreRemover()),
             isDefault: true)
         _ = try core.send(
             AdoptLegacySession(

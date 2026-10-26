@@ -32,8 +32,6 @@ enum BrowserPageConfiguration {
     static func make(
         for profile: BrowsingProfile,
         websiteDataStore: WKWebsiteDataStore? = nil,
-        contentRuleList: WKContentRuleList? = nil,
-        contentRuleLists: [WKContentRuleList] = [],
         preferredContentMode: WKWebpagePreferences.ContentMode = .desktop,
         decorate: @MainActor (WKWebViewConfiguration) -> Void = { _ in }
     ) -> WKWebViewConfiguration {
@@ -66,14 +64,6 @@ enum BrowserPageConfiguration {
         configuration.allowsAirPlayForMediaPlayback = true
         configuration.suppressesIncrementalRendering = false
         configuration.limitsNavigationsToAppBoundDomains = false
-        for ruleList in contentRuleLists {
-            configuration.userContentController.add(ruleList)
-        }
-        if let contentRuleList,
-            !contentRuleLists.contains(where: { $0 === contentRuleList })
-        {
-            configuration.userContentController.add(contentRuleList)
-        }
         decorate(configuration)
         return configuration
     }

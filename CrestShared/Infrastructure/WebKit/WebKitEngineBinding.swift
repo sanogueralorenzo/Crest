@@ -74,7 +74,7 @@ final class WebKitEngineBinding: EngineBinding {
     let profileStores: any BrowserEngineProfileRemoving
     /// Whether every profile keeps its website data in memory only, as an
     /// isolated launch's do.
-    private let keepsProfilesInMemory: Bool
+    let keepsProfilesInMemory: Bool
     /// The store each profile that keeps nothing on disk browses in, until the
     /// core erases the profile: every private profile's, and every profile's
     /// when the launch keeps nothing on disk.
@@ -83,8 +83,8 @@ final class WebKitEngineBinding: EngineBinding {
     /// The store on disk each other profile's pages use, while one holds it,
     /// which its next page shares and a site's data is cleared from.
     private(set) var liveStores: [UUID: WeakStore] = [:]
-    /// The content rules every page this binding builds applies, compiled once.
-    let contentRules: WebKitContentRules
+    /// Bundled protection with a separate extension runtime for each profile.
+    let contentBlocking: WebKitContentBlocking
     /// The files this binding's pages download, which the core records.
     private(set) lazy var downloads = WebKitDownloads(binding: self)
     /// The pages' direct path to the views this binding built.
@@ -111,25 +111,21 @@ final class WebKitEngineBinding: EngineBinding {
 
     /// A binding whose profiles' stores `profileStores` removes, which keeps
     /// every profile in memory when `keepsProfilesInMemory`, and whose pages'
-    /// content rules `contentRuleLists` compiles; nil compiles the core's
-    /// rules as the launch allows.
+    /// protection `contentBlocking` hosts in each profile.
     init(
         profileStores: any BrowserEngineProfileRemoving = WebKitBrowserWebsiteDataStoreRemover(),
         keepsProfilesInMemory: Bool = BrowserLaunchEnvironment.current.usesEphemeralProfileStorage,
-        contentRuleLists: (any BrowserContentRuleListProviding)? = nil
+        contentBlocking: WebKitContentBlocking = WebKitContentBlocking()
     ) {
         self.profileStores = profileStores
         self.keepsProfilesInMemory = keepsProfilesInMemory
-        contentRules = WebKitContentRules(provider: contentRuleLists)
+        self.contentBlocking = contentBlocking
     }
 
     // MARK: - Actions - Binding
 
     func attach(to engines: Engines) {
         self.engines = engines
-        if contentRules.provider == nil {
-            contentRules.provider = BrowserContentRuleListProvider.forLaunch(core: engines.core)
-        }
         engines.core.followPrompts(self)
     }
 
@@ -249,6 +245,8 @@ final class WebKitEngineBinding: EngineBinding {
         page.binding = self
         pages = pages.filter { $0.value.value != nil }
         pages[page.id] = WeakPage(value: page)
+        page.contentBlocker.controller.didOpenTab(page)
+        page.applyContentBlocking(policy: page.contentBlockingPolicy, reloadsImmediately: false)
         return page
     }
 
@@ -259,17 +257,19 @@ final class WebKitEngineBinding: EngineBinding {
     /// or stops. A page the core asked to bring back restores what it kept
     /// once its host attaches.
     func build(_ creation: CreatePage, in space: SpaceModel?, popup: WebKitPopup?) -> WebKitEnginePage {
-        let contentRuleLists =
-            space.map { contentRules.ruleLists(for: $0.settings.browsingPreferences.contentBlocking) }
-            ?? []
+        let dataStore =
+            popup?.configuration.websiteDataStore
+            ?? store(profileID: creation.profileID, isPrivate: creation.isPrivate)
+        let blocker = contentBlocking.blocker(
+            profileID: creation.profileID, dataStore: dataStore, isPrivate: creation.isPrivate, binding: self)
         let configuration =
             popup?.configuration
             ?? BrowserPageConfiguration.make(
                 for: BrowsingProfile(id: creation.profileID),
-                websiteDataStore: store(profileID: creation.profileID, isPrivate: creation.isPrivate),
-                contentRuleLists: contentRuleLists,
+                websiteDataStore: dataStore,
                 preferredContentMode: BrowserPlatformWebKit.preferredContentMode,
                 decorate: BrowserPlatformWebKit.decorate)
+        configuration.webExtensionController = blocker.controller
         if popup == nil {
             // A popup shares its opener's controller, whose bridge already
             // runs in it and posts through the opener's handler.
@@ -281,7 +281,8 @@ final class WebKitEngineBinding: EngineBinding {
             id: creation.pageID,
             profileID: creation.profileID,
             webView: BrowserPlatformWebKit.makeWebView(configuration: configuration),
-            contentRuleLists: contentRuleLists,
+            contentBlocker: blocker,
+            contentBlockingPolicy: space?.settings.browsingPreferences.contentBlocking ?? .off,
             ownsUserContentController: popup == nil,
             isPrivate: creation.isPrivate,
             restoring: creation.restoreState)

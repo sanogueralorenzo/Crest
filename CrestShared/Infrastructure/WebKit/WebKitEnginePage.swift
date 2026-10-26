@@ -1,3 +1,4 @@
+import Observation
 import WebKit
 
 /// A page WebKit's binding built for a page the core opened: its web view,
@@ -7,7 +8,7 @@ import WebKit
 /// the core handed it, and keeps what brings it back when the core closes it
 /// keeping its state.
 @MainActor
-final class WebKitEnginePage: EngineHostedPage {
+final class WebKitEnginePage: NSObject, EngineHostedPage {
     // MARK: - Variables
 
     /// The core's page this one is.
@@ -16,8 +17,12 @@ final class WebKitEnginePage: EngineHostedPage {
     let profileID: UUID
     let webView: WKWebView
     let engine: BrowserWebKitPageEngine
-    /// The content rules the page was built with.
-    let contentRuleLists: [WKContentRuleList]
+    let contentBlocker: WebKitContentBlocker
+    private(set) var contentBlockingPolicy: ContentBlockingPolicy
+    private(set) var isClosed = false
+    private var navigationWaits: [UUID: @MainActor (Bool) -> Void] = [:]
+    private var observations: [NSKeyValueObservation] = []
+    var isContentBlockingActive: Bool { contentBlockingPolicy.blocksContent && contentBlocker.isEnabled }
     /// False when the page shares the user content controller of the page its
     /// configuration came from, which every popup does: WebKit copies the
     /// opener's configuration and the copy keeps the same controller.
@@ -51,18 +56,32 @@ final class WebKitEnginePage: EngineHostedPage {
     // MARK: - Initializers
 
     init(
-        id: UUID, profileID: UUID, webView: WKWebView, contentRuleLists: [WKContentRuleList],
+        id: UUID, profileID: UUID, webView: WKWebView, contentBlocker: WebKitContentBlocker,
+        contentBlockingPolicy: ContentBlockingPolicy,
         ownsUserContentController: Bool, isPrivate: Bool = false, restoring: PageRestoreState? = nil
     ) {
         self.id = id
         self.profileID = profileID
         self.webView = webView
         engine = BrowserWebKitPageEngine(webView: webView)
-        self.contentRuleLists = contentRuleLists
+        self.contentBlocker = contentBlocker
+        self.contentBlockingPolicy = contentBlockingPolicy
         self.ownsUserContentController = ownsUserContentController
         self.isPrivate = isPrivate
         self.restoring = restoring
+        super.init()
         engine.enginePage = self
+        observations = [
+            webView.observe(\.url, options: .new) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.notifyExtension() }
+            },
+            webView.observe(\.title, options: .new) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.notifyExtension() }
+            },
+            webView.observe(\.isLoading, options: .new) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.notifyExtension() }
+            },
+        ]
     }
 
     // MARK: - Actions - Hosting
@@ -195,4 +214,65 @@ final class WebKitEnginePage: EngineHostedPage {
     func resetAutomaticDownloads() {
         binding?.downloads.resetAutomaticSequence(of: id)
     }
+}
+
+// MARK: - Content blocking
+
+extension WebKitEnginePage {
+    /// Every navigation, including restores, popups and history, waits for uBOL's rules and scripts.
+    func prepareNavigation(_ completion: @escaping @MainActor (Bool) -> Void) {
+        guard !isClosed else {
+            completion(false)
+            return
+        }
+        let request = UUID()
+        navigationWaits[request] = completion
+        let blocker = contentBlocker
+        let enabled = contentBlockingPolicy.blocksContent
+        Task { [weak self] in
+            try? await blocker.setEnabled(enabled)
+            guard let self else { return }
+            guard let completion = navigationWaits.removeValue(forKey: request) else { return }
+            if !isClosed && contentBlockingPolicy.blocksContent != enabled {
+                prepareNavigation(completion)
+            } else {
+                completion(!isClosed)
+            }
+        }
+    }
+
+    func applyContentBlocking(policy: ContentBlockingPolicy, reloadsImmediately: Bool) {
+        guard !isClosed else { return }
+        let changed = policy != contentBlockingPolicy
+        contentBlockingPolicy = policy
+        let blocker = contentBlocker
+        Task { [weak self] in
+            try? await blocker.setEnabled(policy.blocksContent)
+            guard let self, !isClosed, contentBlockingPolicy == policy else { return }
+            if changed && reloadsImmediately { webView.reload() }
+        }
+    }
+
+    private func notifyExtension() {
+        guard !isClosed else { return }
+        contentBlocker.controller.didChangeTabProperties([.URL, .title, .loading], for: self)
+    }
+
+    func close() {
+        guard !isClosed else { return }
+        isClosed = true
+        observations.removeAll()
+        let waiting = navigationWaits.values
+        navigationWaits = [:]
+        for completion in waiting { completion(false) }
+        contentBlocker.controller.didCloseTab(self, windowIsClosing: false)
+    }
+}
+
+extension WebKitEnginePage: WKWebExtensionTab {
+    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { contentBlocker }
+    func webView(for context: WKWebExtensionContext) -> WKWebView? { webView }
+    func url(for context: WKWebExtensionContext) -> URL? { webView.url }
+    func title(for context: WKWebExtensionContext) -> String? { webView.title }
+    func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !webView.isLoading }
 }

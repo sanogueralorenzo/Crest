@@ -30,7 +30,6 @@ final class BrowserWebKitPageAdapter: BrowserPageEngineAdapter {
     private(set) var reporter: EnginePageReporter?
     /// The document's address as WebKit last published it.
     private var documentURL: URL?
-    let contentRuleSession: BrowserPageContentRuleSession
     var geolocationCoordinator: BrowserGeolocationCoordinator?
     private let geolocationService: any BrowserGeolocationServicing
     private let recoverGeolocationSystemAuthorization: BrowserGeolocationCoordinator.RecoverSystemAuthorization?
@@ -68,16 +67,14 @@ final class BrowserWebKitPageAdapter: BrowserPageEngineAdapter {
         )
     }
 
-    var isContentBlockingActive: Bool { contentRuleSession.isActive }
+    var isContentBlockingActive: Bool { webKitPage.isContentBlockingActive }
     var translationDocument: BrowserTranslationDocument? { BrowserTranslationDocument(webView: webView) }
 
     // MARK: - Initializers
 
-    /// The adapter over the page WebKit's binding built. `contentRuleList` is
-    /// a rule list the page applies beside its Space's.
+    /// The adapter over the page WebKit's binding built.
     init(
         page webKitPage: WebKitEnginePage,
-        contentRuleList: WKContentRuleList? = nil,
         geolocationService: any BrowserGeolocationServicing = BrowserGeolocationSystemService(),
         recoverGeolocationSystemAuthorization: BrowserGeolocationCoordinator.RecoverSystemAuthorization? = nil
     ) {
@@ -88,10 +85,6 @@ final class BrowserWebKitPageAdapter: BrowserPageEngineAdapter {
         enginePage = webKitPage.makeEnginePage()
         self.webView = webView
         webKit = webKitPage.engine
-        contentRuleSession = BrowserPageContentRuleSession(
-            ruleLists: webKitPage.contentRuleLists,
-            additionalRuleList: contentRuleList
-        )
         ownsUserContentController = webKitPage.ownsUserContentController
         self.geolocationService = geolocationService
         self.recoverGeolocationSystemAuthorization = recoverGeolocationSystemAuthorization
@@ -248,13 +241,10 @@ final class BrowserWebKitPageAdapter: BrowserPageEngineAdapter {
 
     func applyContentBlocking(
         policy: ContentBlockingPolicy,
-        balancedRuleLists: [WKContentRuleList],
         reloadsImmediately: Bool
     ) {
-        contentRuleSession.apply(
+        webKitPage.applyContentBlocking(
             policy: policy,
-            balancedRuleLists: balancedRuleLists,
-            to: webView,
             reloadsImmediately: reloadsImmediately
         )
     }

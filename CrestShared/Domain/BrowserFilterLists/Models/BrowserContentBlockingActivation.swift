@@ -6,7 +6,7 @@
 /// API reports whether a document holds uncommitted user input, so reloading is
 /// the only way to make a change visible at once — and a reload throws away
 /// whatever the person was typing.
-enum BrowserContentRuleListActivation {
+enum BrowserContentBlockingActivation {
     /// Swap the rule lists and leave the document alone. WebKit picks the new
     /// lists up on the page's next navigation.
     case onNextNavigation

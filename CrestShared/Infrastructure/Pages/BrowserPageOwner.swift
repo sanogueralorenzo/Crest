@@ -119,17 +119,17 @@ extension BrowserPageOwner {
             let page = runtime.page
             page.applyContentBlocking(
                 policy: update.policy(for: page.spaceID),
-                balancedRuleLists: contentBlocking.balancedRuleLists ?? [],
                 activation: update.activation(for: page.spaceID, isPresented: presented.contains(tabID))
             )
         }
     }
 
-    /// Refreshes rule lists without reloading unchanged documents.
+    /// Retries preparation without disturbing unchanged page documents.
     func reloadContentBlocking() async {
-        contentBlocking.invalidateRuleLists()
+        await contentBlocking.prepare()
         await reconcileContentBlocking()
     }
+
 }
 
 // MARK: - Space data

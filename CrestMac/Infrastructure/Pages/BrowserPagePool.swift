@@ -134,7 +134,7 @@ final class BrowserPagePool:
         self.hostedNotificationCenter = hostedNotificationCenter
         self.mediaSessionStore = browsingMode.isPrivate ? nil : mediaSessionStore
         self.dialogPresenter = dialogPresenter
-        contentBlocking = BrowserContentBlockingController(rules: core.engines.webKit?.contentRules)
+        contentBlocking = BrowserContentBlockingController(blocking: core.engines.webKit?.contentBlocking)
         self.openNewTab = openNewTab
         self.openModifiedLink = openModifiedLink
         self.splitLinkHost = splitLinkHost
@@ -706,8 +706,7 @@ final class BrowserPagePool:
             let page = makePage(space: space, opened: opened)
         else { return nil }
         page.applyContentBlocking(
-            policy: space.settings.browsingPreferences.contentBlocking,
-            balancedRuleLists: contentBlocking.balancedRuleLists ?? [])
+            policy: space.settings.browsingPreferences.contentBlocking)
         page.corePage.load(url)
         return page
     }

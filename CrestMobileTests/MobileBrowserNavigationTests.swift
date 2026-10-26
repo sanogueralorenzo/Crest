@@ -509,200 +509,29 @@ final class MobileBrowserNavigationTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(pages.activePage) === firstPage)
     }
 
-    func testPageStoreAppliesAndReconcilesContentBlockingPerSpace() async throws {
-        let store = try isolatedRuleListStore()
-        let ruleList = try await BrowserContentRuleListCompiler.compile(
-            identifier: "com.pauldavis.crest.tests.mobile-policy.\(UUID().uuidString)",
-            source: blockingRuleSource(matching: "never-match\\.crest-test$"),
-            store: store
-        )
-        let provider = StubMobileContentRuleListProvider(generations: [[ruleList]])
-        let space = makeSpace(index: 28)
-        let browser = BrowserStore.hostingPages(
-            SessionState.Seed(spaces: [space]), core: .hostingPages(contentRuleLists: provider))
+    func testProtectionChangeReloadsOnlyThePresentedMobilePage() async throws {
+        let activeTab = TabState.Seed.startPage()
+        let backgroundTab = TabState.Seed.startPage()
+        let space = SpaceState.Seed(name: "Protection", tabs: [activeTab, backgroundTab])
+        let browser = BrowserStore.hostingPages(SessionState.Seed(spaces: [space]))
         let pages = MobileBrowserPageStore(browser: browser, usesEphemeralWebsiteDataStores: true)
-
-        await pages.prepareContentBlocking()
-        XCTAssertEqual(provider.requestCount, 1)
-        pages.present(space: space.id)
-        XCTAssertEqual(pages.activePage?.isContentBlockingActive, true)
-
+        pages.present(tab: backgroundTab.id, in: space.id)
+        let background = try XCTUnwrap(pages.activePage)
+        pages.present(tab: activeTab.id, in: space.id)
+        let active = try XCTUnwrap(pages.activePage)
+        await pages.reconcileContentBlocking()
+        for page in [active, background] { try await showDocument(in: page) }
+        let activeCount = active.completedNavigationCount
+        let backgroundCount = background.completedNavigationCount
         var preferences = try XCTUnwrap(browser.spaceModel(space.id)).settings.browsingPreferences
         preferences.contentBlocking = .off
         browser.updateBrowsingPreferences(preferences, in: space.id)
         await pages.reconcileContentBlocking()
-
-        XCTAssertEqual(pages.activePage?.isContentBlockingActive, false)
-
-        pages.handleMemoryPressure(.warning)
-    }
-
-    func testFilterListUpdateSwapsMobileRulesWithoutReloadingResidentPages() async throws {
-        let documents = try MobileTrackerDocuments()
-        defer { documents.remove() }
-        let store = try isolatedRuleListStore()
-        let firstGeneration = try await BrowserContentRuleListCompiler.compile(
-            identifier: "com.pauldavis.crest.tests.mobile-first.\(UUID().uuidString)",
-            source: blockingRuleSource(matching: "first-tracker\\.js$"),
-            store: store
-        )
-        let secondGeneration = try await BrowserContentRuleListCompiler.compile(
-            identifier: "com.pauldavis.crest.tests.mobile-second.\(UUID().uuidString)",
-            source: blockingRuleSource(matching: "second-tracker\\.js$"),
-            store: store
-        )
-        let provider = StubMobileContentRuleListProvider(
-            generations: [[firstGeneration], [secondGeneration]]
-        )
-        let activeTab = TabState.Seed.startPage()
-        let backgroundTab = TabState.Seed.startPage()
-        let space = contentBlockingSpace(tabs: [activeTab, backgroundTab])
-        let session = SessionState.Seed(spaces: [space])
-        let pages = MobileBrowserPageStore(
-            browser: .hostingPages(
-                session, browsingMode: .privateBrowsing, core: .hostingPages(contentRuleLists: provider)),
-            browsingMode: .privateBrowsing,
-            usesEphemeralWebsiteDataStores: true
-        )
-
-        await pages.prepareContentBlocking()
-        pages.present(tab: backgroundTab.id, in: space.id)
-        let backgroundPage = try XCTUnwrap(pages.activePage)
-        pages.present(tab: activeTab.id, in: space.id)
-        let activePage = try XCTUnwrap(pages.activePage)
-        XCTAssertFalse(activePage === backgroundPage)
-
-        for page in [activePage, backgroundPage] {
-            try await documents.load(into: page)
-            let trackers = try await documents.trackerState(in: page)
-            XCTAssertEqual(trackers, [false, true])
-            try await documents.markSentinel(in: page)
-        }
-        let activeNavigationCount = activePage.completedNavigationCount
-        let backgroundNavigationCount = backgroundPage.completedNavigationCount
-
-        await pages.reloadContentBlocking()
-
-        try await Task.sleep(for: .milliseconds(400))
-        for (page, navigationCount) in [
-            (activePage, activeNavigationCount),
-            (backgroundPage, backgroundNavigationCount),
-        ] {
-            let keptSentinel = try await documents.hasSentinel(in: page)
-            let trackers = try await documents.trackerState(in: page)
-            XCTAssertEqual(page.completedNavigationCount, navigationCount)
-            XCTAssertFalse(page.live.isLoading)
-            XCTAssertTrue(keptSentinel)
-            XCTAssertEqual(trackers, [false, true])
-            XCTAssertEqual(page.isContentBlockingActive, true)
-        }
-
-        for page in [activePage, backgroundPage] {
-            try await documents.load(into: page)
-            let trackers = try await documents.trackerState(in: page)
-            XCTAssertEqual(trackers, [true, false])
-        }
-    }
-
-    func testProtectionChangeReloadsTheActiveMobilePageAndOnlyThatPage() async throws {
-        let documents = try MobileTrackerDocuments()
-        defer { documents.remove() }
-        let store = try isolatedRuleListStore()
-        let ruleList = try await BrowserContentRuleListCompiler.compile(
-            identifier: "com.pauldavis.crest.tests.mobile-protection.\(UUID().uuidString)",
-            source: blockingRuleSource(matching: "first-tracker\\.js$"),
-            store: store
-        )
-        let provider = StubMobileContentRuleListProvider(generations: [[ruleList]])
-        let activeTab = TabState.Seed.startPage()
-        let backgroundTab = TabState.Seed.startPage()
-        let space = contentBlockingSpace(tabs: [activeTab, backgroundTab])
-        let browser = BrowserStore.hostingPages(
-            SessionState.Seed(spaces: [space]), browsingMode: .privateBrowsing,
-            core: .hostingPages(contentRuleLists: provider))
-        let pages = MobileBrowserPageStore(
-            browser: browser,
-            browsingMode: .privateBrowsing,
-            usesEphemeralWebsiteDataStores: true
-        )
-
-        await pages.prepareContentBlocking()
-        pages.present(tab: backgroundTab.id, in: space.id)
-        let backgroundPage = try XCTUnwrap(pages.activePage)
-        pages.present(tab: activeTab.id, in: space.id)
-        let activePage = try XCTUnwrap(pages.activePage)
-        // Adopts the Space's current protection level the way launching does.
-        // Nothing may reload for it.
-        await pages.reconcileContentBlocking()
-
-        for page in [activePage, backgroundPage] {
-            try await documents.load(into: page)
-            try await documents.markSentinel(in: page)
-        }
-        let activeNavigationCount = activePage.completedNavigationCount
-        let backgroundNavigationCount = backgroundPage.completedNavigationCount
-
-        var preferences = try XCTUnwrap(browser.spaceModel(space.id)).settings.browsingPreferences
-        preferences.contentBlocking = .off
-        browser.updateBrowsingPreferences(preferences, in: space.id)
-        await pages.reconcileContentBlocking()
-
-        try await documents.waitForNavigation(
-            after: activeNavigationCount,
-            on: activePage
-        )
-        let activeSentinel = try await documents.hasSentinel(in: activePage)
-        let activeTrackers = try await documents.trackerState(in: activePage)
-        XCTAssertFalse(activeSentinel)
-        XCTAssertEqual(activeTrackers, [true, true])
-        XCTAssertEqual(activePage.isContentBlockingActive, false)
-
-        let backgroundSentinel = try await documents.hasSentinel(in: backgroundPage)
-        XCTAssertEqual(
-            backgroundPage.completedNavigationCount,
-            backgroundNavigationCount
-        )
-        XCTAssertFalse(backgroundPage.live.isLoading)
-        XCTAssertTrue(backgroundSentinel)
-        XCTAssertEqual(backgroundPage.isContentBlockingActive, false)
-    }
-
-    private func contentBlockingSpace(tabs: [TabState.Seed]) -> SpaceState.Seed {
-        SpaceState.Seed(
-            name: "Protected",
-            folders: [],
-            tabs: tabs
-        )
-    }
-
-    private func blockingRuleSource(matching urlFilter: String) -> String {
-        let rules: [[String: Any]] = [
-            [
-                "trigger": [
-                    "url-filter": urlFilter,
-                    "resource-type": ["script"],
-                ],
-                "action": ["type": "block"],
-            ]
-        ]
-        let data = try! JSONSerialization.data(withJSONObject: rules)
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    /// A rule-list store of its own, so a test never sweeps or reads compiled
-    /// lists belonging to the app.
-    private func isolatedRuleListStore() throws -> WKContentRuleListStore {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "crest-mobile-rule-list-store-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        return try XCTUnwrap(WKContentRuleListStore(url: directory))
+        try await waitUntil { active.completedNavigationCount > activeCount }
+        XCTAssertEqual(background.completedNavigationCount, backgroundCount)
+        XCTAssertFalse(active.isContentBlockingActive)
+        XCTAssertFalse(background.isContentBlockingActive)
+        pages.unloadPages(in: space.id)
     }
 
     func testDeletingSpaceThroughMobileRegistryReleasesEveryWindowBeforeSharedData() async throws {

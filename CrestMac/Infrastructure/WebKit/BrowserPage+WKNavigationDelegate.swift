@@ -67,10 +67,20 @@ extension BrowserPage: WKNavigationDelegate {
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
-        navigationDecider.decision(
-            for: navigationAction,
-            isAppInitiated: isAppInitiated(navigationAction)
-        ).apply(to: self, for: navigationAction, in: webView, decisionHandler: decisionHandler)
+        guard let webKitEnginePage else {
+            decisionHandler(.cancel)
+            return
+        }
+        webKitEnginePage.prepareNavigation { [weak self] allowed in
+            guard let self, allowed else {
+                decisionHandler(.cancel)
+                return
+            }
+            navigationDecider.decision(
+                for: navigationAction,
+                isAppInitiated: isAppInitiated(navigationAction)
+            ).apply(to: self, for: navigationAction, in: webView, decisionHandler: decisionHandler)
+        }
     }
 
     func routeModifiedLink(_ request: URLRequest, selecting: Bool) {

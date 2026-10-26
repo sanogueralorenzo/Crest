@@ -98,7 +98,7 @@ final class MobileBrowserPageStore:
         downloadRiskConfirmation = downloads.riskConfirmation
         downloadCenter = downloads.center
         downloadPrompts = downloads.prompts
-        contentBlocking = BrowserContentBlockingController(rules: browser.core.engines.webKit?.contentRules)
+        contentBlocking = BrowserContentBlockingController(blocking: browser.core.engines.webKit?.contentBlocking)
         pageZoomPreferences.register(self)
         host.dropPresentation = { [weak self] in self?.dropPresentation(of: $0) }
         browser.core.engines.observeRecords(self) { [weak self] in self?.restyleVisitedLinks(after: $0) }

@@ -25,7 +25,6 @@ extension BrowserPage {
         spaceID: UUID,
         profileID: UUID,
         spaceName: String,
-        contentRuleList: WKContentRuleList? = nil,
         defaultPageZoom: CGFloat = BrowserDefaultPageZoomStore.defaultLevel,
         openNewTab: @escaping (URL) -> Void = { _ in },
         openModifiedLink: @escaping (URLRequest, UUID, Bool) -> Void = { _, _, _ in },
@@ -37,7 +36,6 @@ extension BrowserPage {
             corePage: corePage,
             engine: BrowserWebKitPageAdapter(
                 page: webKitPage,
-                contentRuleList: contentRuleList,
                 geolocationService: geolocationService,
                 recoverGeolocationSystemAuthorization: recoverGeolocationSystemAuthorization
             ),

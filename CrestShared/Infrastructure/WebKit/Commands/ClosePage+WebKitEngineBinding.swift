@@ -6,6 +6,7 @@ extension ClosePage {
     @MainActor func perform(on binding: WebKitEngineBinding) {
         guard let engines = binding.engines else { return }
         let page = binding.pages.removeValue(forKey: pageID)?.value
+        page?.close()
         binding.declinePrompts(of: pageID)
         binding.stagedLinks = binding.stagedLinks.filter { $0.value.sourcePageID != pageID }
         engines.report(PageClosed(pageID: pageID, restoreState: keepsState ? page?.restoreState : nil), from: binding)

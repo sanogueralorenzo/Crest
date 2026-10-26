@@ -6,363 +6,171 @@ import XCTest
 
 @MainActor
 final class BrowserContentBlockingTests: XCTestCase {
-    func testTurningOffCrestProtectionPreservesAnotherInstalledRuleList() async throws {
-        let crestIdentifier = "com.pauldavis.crest.tests.owned-rules.\(UUID().uuidString)"
-        let extensionIdentifier = "com.pauldavis.crest.tests.extension-rules.\(UUID().uuidString)"
-        let crestRuleList = try await BrowserContentRuleListCompiler.compile(
-            identifier: crestIdentifier,
-            source: blockingRuleSource(matching: "crest-script\\.js$")
-        )
-        let extensionRuleList = try await BrowserContentRuleListCompiler.compile(
-            identifier: extensionIdentifier,
-            source: blockingRuleSource(matching: "extension-script\\.js$")
-        )
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("crest-exact-rule-removal-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        defer { try? FileManager.default.removeItem(at: directory) }
+    // MARK: - Actions - Protection
 
-        do {
-            let documentURL = directory.appendingPathComponent("index.html")
-            try Data(
-                #"""
-                <!doctype html><html><body>
-                  <script src="crest-script.js"></script>
-                  <script src="extension-script.js"></script>
-                </body></html>
-                """#.utf8
-            ).write(to: documentURL)
-            try Data("window.crestOwnedScriptLoaded = true;".utf8).write(
-                to: directory.appendingPathComponent("crest-script.js")
+    func testInitialNavigationWaitsForRulesAndToggleReloadsOnlyPresentedPages() async throws {
+        let fixture = try extensionFixture()
+        let server = try BrowserPrivacyHTTPServer()
+        server.overrideResponse = { request in
+            let body =
+                request.path == "/blocked.js"
+                ? "window.trackerLoaded = true;"
+                : "<html><head><link rel='icon' href='data:,'></head><body><div id='ad'>Ad</div><script src='/blocked.js'></script></body></html>"
+            return (
+                "200 OK", "Content-Type: \(request.path == "/blocked.js" ? "application/javascript" : "text/html")\r\n",
+                Data(body.utf8)
             )
-            try Data("window.crestExtensionScriptLoaded = true;".utf8).write(
-                to: directory.appendingPathComponent("extension-script.js")
-            )
-
-            let space = try XCTUnwrap(SessionState.Seed.preview.spaces.first)
-            let browser = BrowserStore.hostingPages(.preview)
-            // A popup shares its opener's user content controller, so it holds
-            // rule lists Crest did not install.
-            let opener = try XCTUnwrap(
-                browser.openWebKitPage(in: space.id, for: try XCTUnwrap(space.tabs.first).id))
-            defer { opener.core.release(keepingState: false) }
-            let configuration = BrowserPageConfiguration.make(
-                for: BrowsingProfile(id: space.profileID),
-                websiteDataStore: .nonPersistent(),
-                contentRuleList: crestRuleList
-            )
-            configuration.userContentController.add(extensionRuleList)
-            let page = try XCTUnwrap(
-                browser.openWebKitPopup(
-                    from: opener.webKit, configuration: configuration,
-                    loading: URLRequest(url: try XCTUnwrap(URL(string: "about:blank")))
-                ).map {
-                    opened in
-                    BrowserPage(
-                        corePage: opened.core,
-                        webKitPage: opened.webKit,
-                        dialogPresenter: BrowserDialogPresenter(),
-                        downloadCenter: BrowserDownloadCenter(),
-                        permissionCenter: BrowserSitePermissionCenter(),
-                        spaceID: space.id,
-                        profileID: space.profileID,
-                        spaceName: space.settings.name,
-                        contentRuleList: crestRuleList
-                    )
-                })
-            defer { page.release(keepingState: false) }
-
-            page.applyContentBlocking(policy: .off, balancedRuleList: crestRuleList)
-            let startingNavigationCount = page.completedNavigationCount
-            page.webView.loadFileURL(documentURL, allowingReadAccessTo: directory)
-            try await waitForNavigation(after: startingNavigationCount, on: page)
-
-            let crestScriptLoaded =
-                try await page.webView.evaluateJavaScript(
-                    "window.crestOwnedScriptLoaded === true"
-                ) as? Bool
-            let extensionScriptLoaded =
-                try await page.webView.evaluateJavaScript(
-                    "window.crestExtensionScriptLoaded === true"
-                ) as? Bool
-            XCTAssertEqual(crestScriptLoaded, true)
-            XCTAssertEqual(extensionScriptLoaded, false)
-        } catch {
-            await BrowserContentRuleListCompiler.remove(identifier: crestIdentifier)
-            await BrowserContentRuleListCompiler.remove(identifier: extensionIdentifier)
-            throw error
         }
-        await BrowserContentRuleListCompiler.remove(identifier: crestIdentifier)
-        await BrowserContentRuleListCompiler.remove(identifier: extensionIdentifier)
-    }
-
-    func testFilterListUpdateSwapsRulesWithoutReloadingResidentPages() async throws {
-        let documents = try TrackerDocuments()
-        defer { documents.remove() }
-        let store = try isolatedRuleListStore()
-        defer { store.remove() }
-        let firstGeneration = try await BrowserContentRuleListCompiler.compile(
-            identifier: "com.pauldavis.crest.tests.first-generation.\(UUID().uuidString)",
-            source: blockingRuleSource(matching: "first-tracker\\.js$"),
-            store: store.store
-        )
-        let secondGeneration = try await BrowserContentRuleListCompiler.compile(
-            identifier: "com.pauldavis.crest.tests.second-generation.\(UUID().uuidString)",
-            source: blockingRuleSource(matching: "second-tracker\\.js$"),
-            store: store.store
-        )
-        let provider = StubContentRuleListProvider(
-            generations: [[firstGeneration], [secondGeneration]]
-        )
-        let activeTab = TabState.Seed.startPage()
-        let backgroundTab = TabState.Seed.startPage()
-        let space = contentBlockingSpace(
-            name: "Protected",
-            tabs: [activeTab, backgroundTab]
-        )
+        try await server.start()
+        defer { server.stop() }
+        let address = server.url(host: "127.0.0.1", path: "/document")
+        let first = TabState.Seed(title: "Protected", url: address, placement: .current)
+        let second = TabState.Seed(title: "Protected", url: address, placement: .current)
+        let space = SpaceState.Seed(name: "Protected", tabs: [first, second])
         let browser = BrowserStore.hostingPages(
-            SessionState.Seed(spaces: [space]), showing: space.id, tabs: [space.id: backgroundTab.id],
-            core: .hostingPages(contentRuleLists: provider))
-        let pool = BrowserPagePool(browser: browser, browsingMode: .privateBrowsing)
-        defer {
-            for tabID in pool.retainedTabIDs {
-                pool.unloadPage(for: tabID)
-            }
-        }
-
-        await pool.prepareContentBlocking()
+            SessionState.Seed(spaces: [space]), showing: space.id, tabs: [space.id: first.id],
+            core: .hostingPages(contentBlocking: WebKitContentBlocking(resourceURL: fixture)))
+        let pool = BrowserPagePool(browser: browser)
+        defer { for id in pool.retainedTabIDs { pool.unloadPage(for: id) } }
         pool.select()
-        let backgroundPage = try XCTUnwrap(pool.activePage)
-        pool.present(tab: activeTab.id, in: space.id)
-        let activePage = try XCTUnwrap(pool.activePage)
-        XCTAssertFalse(activePage === backgroundPage)
-
-        for page in [activePage, backgroundPage] {
-            try await documents.load(into: page)
-            let trackers = try await documents.trackerState(in: page)
-            XCTAssertEqual(trackers, [false, true])
-            try await documents.markSentinel(in: page)
-        }
-        let activeNavigationCount = activePage.completedNavigationCount
-        let backgroundNavigationCount = backgroundPage.completedNavigationCount
-
-        await pool.reloadContentBlocking()
-
-        // The swap must reach both pages without disturbing either document.
-        try await Task.sleep(for: .milliseconds(400))
-        for (page, navigationCount) in [
-            (activePage, activeNavigationCount),
-            (backgroundPage, backgroundNavigationCount),
-        ] {
-            let keptSentinel = try await documents.hasSentinel(in: page)
-            let trackers = try await documents.trackerState(in: page)
-            XCTAssertEqual(page.completedNavigationCount, navigationCount)
-            XCTAssertFalse(page.live.isLoading)
-            XCTAssertTrue(keptSentinel)
-            XCTAssertEqual(trackers, [false, true])
-            XCTAssertEqual(page.isContentBlockingActive, true)
-        }
-
-        // The next navigation in each page is the one that answers to the new
-        // rules: the first tracker is allowed again and the second is blocked.
-        for page in [activePage, backgroundPage] {
-            try await documents.load(into: page)
-            let trackers = try await documents.trackerState(in: page)
-            XCTAssertEqual(trackers, [true, false])
-        }
+        let background = try XCTUnwrap(pool.activePage)
+        try await waitUntil { background.completedNavigationCount > 0 }
+        let hidden =
+            try await background.webView.evaluateJavaScript("getComputedStyle(document.querySelector('#ad')).display")
+            as? String
+        let tracker = try await background.webView.evaluateJavaScript("window.trackerLoaded === true") as? Bool
+        XCTAssertEqual(hidden, "none")
+        XCTAssertEqual(tracker, false)
+        XCTAssertFalse(server.requests.contains { $0.path == "/blocked.js" })
+        XCTAssertTrue(background.isContentBlockingActive)
+        pool.present(tab: second.id, in: space.id)
+        let presented = try XCTUnwrap(pool.activePage)
+        try await waitUntil { presented.completedNavigationCount > 0 }
+        await pool.reconcileContentBlocking()
+        let backgroundCount = background.completedNavigationCount
+        let presentedCount = presented.completedNavigationCount
+        var preferences = try XCTUnwrap(browser.spaceModel(space.id)).settings.browsingPreferences
+        preferences.contentBlocking = .off
+        browser.updateBrowsingPreferences(preferences, in: space.id)
+        await pool.reconcileContentBlocking()
+        try await waitUntil { presented.completedNavigationCount > presentedCount }
+        XCTAssertEqual(background.completedNavigationCount, backgroundCount)
+        let allowed = try await presented.webView.evaluateJavaScript("window.trackerLoaded === true") as? Bool
+        XCTAssertEqual(allowed, true)
+        XCTAssertFalse(presented.isContentBlockingActive)
+        XCTAssertFalse(background.isContentBlockingActive)
     }
 
-    private func isolatedRuleListStore() throws -> IsolatedRuleListStore {
-        try IsolatedRuleListStore()
+    func testProfilesNeverExposeEachOthersTabsAndPrivateControllersAreEphemeral() async throws {
+        let fixture = try extensionFixture()
+        let firstTab = TabState.Seed(title: "Blank", url: URL(string: "about:blank"), placement: .current)
+        let secondTab = TabState.Seed(title: "Blank", url: URL(string: "about:blank"), placement: .current)
+        let first = SpaceState.Seed(name: "First", tabs: [firstTab])
+        let second = SpaceState.Seed(name: "Second", tabs: [secondTab])
+        let manager = WebKitContentBlocking(resourceURL: fixture)
+        let core = CrestCore.hostingPages(contentBlocking: manager)
+        let browser = BrowserStore.hostingPages(SessionState.Seed(spaces: [first, second]), core: core)
+        let pool = BrowserPagePool(browser: browser)
+        defer { for id in pool.retainedTabIDs { pool.unloadPage(for: id) } }
+        pool.present(tab: firstTab.id, in: first.id)
+        let firstPage = try XCTUnwrap(pool.activePage?.webKitEnginePage)
+        pool.present(tab: secondTab.id, in: second.id)
+        let secondPage = try XCTUnwrap(pool.activePage?.webKitEnginePage)
+        try await firstPage.contentBlocker.setEnabled(true)
+        try await secondPage.contentBlocker.setEnabled(true)
+        let firstContext = try XCTUnwrap(firstPage.contentBlocker.controller.extensionContexts.first)
+        let tabs = firstPage.contentBlocker.tabs(for: firstContext)
+        XCTAssertEqual(tabs.count, 1)
+        XCTAssertTrue(tabs.first as? WebKitEnginePage === firstPage)
+        XCTAssertFalse(firstPage.contentBlocker.controller === secondPage.contentBlocker.controller)
+        let binding = try XCTUnwrap(core.engines.webKit)
+        let privateBlocker = manager.blocker(
+            profileID: UUID(), dataStore: .nonPersistent(), isPrivate: true, binding: binding)
+        try await privateBlocker.setEnabled(true)
+        XCTAssertFalse(privateBlocker.controller.configuration.isPersistent)
+        XCTAssertTrue(try XCTUnwrap(privateBlocker.controller.extensionContexts.first).hasAccessToPrivateData)
+        pool.unloadPage(for: firstTab.id)
+        XCTAssertTrue(firstPage.contentBlocker.tabs(for: firstContext).isEmpty)
+        try await manager.removeData(profileID: privateBlocker.profileID, isEphemeral: true)
+        XCTAssertTrue(privateBlocker.controller.extensionContexts.isEmpty)
     }
 
-    private func blockingRuleSource(matching urlFilter: String) -> String {
-        let rules: [[String: Any]] = [
-            [
-                "trigger": [
-                    "url-filter": urlFilter,
-                    "resource-type": ["script"],
-                ],
-                "action": ["type": "block"],
-            ]
+    func testClosingDuringStartupDeclinesNavigationWithoutWaitingForExtension() async throws {
+        let fixture = try extensionFixture(delay: 800)
+        let tab = TabState.Seed(title: "Blank", url: URL(string: "about:blank"), placement: .current)
+        let space = SpaceState.Seed(name: "Starting", tabs: [tab])
+        let core = CrestCore.hostingPages(contentBlocking: WebKitContentBlocking(resourceURL: fixture))
+        let browser = BrowserStore.hostingPages(SessionState.Seed(spaces: [space]), core: core)
+        let pool = BrowserPagePool(browser: browser)
+        pool.present(tab: tab.id, in: space.id)
+        let page = try XCTUnwrap(pool.activePage?.webKitEnginePage)
+        var answers: [Bool] = []
+        page.prepareNavigation { answers.append($0) }
+        pool.unloadPage(for: tab.id)
+        XCTAssertEqual(answers, [false])
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(answers, [false])
+        XCTAssertTrue(page.isClosed)
+    }
+
+    func testBundledUbolStartsInThePagesOwnProfile() async throws {
+        let tab = TabState.Seed(title: "Blank", url: URL(string: "about:blank"), placement: .current)
+        let space = SpaceState.Seed(name: "Bundled", tabs: [tab])
+        let browser = BrowserStore.hostingPages(SessionState.Seed(spaces: [space]))
+        let pool = BrowserPagePool(browser: browser)
+        defer { pool.unloadPage(for: tab.id) }
+        pool.present(tab: tab.id, in: space.id)
+        let page = try XCTUnwrap(pool.activePage?.webKitEnginePage)
+        try await page.contentBlocker.setEnabled(true)
+        XCTAssertTrue(page.isContentBlockingActive)
+        XCTAssertNil(page.contentBlocker.errorDescription)
+        XCTAssertTrue(
+            page.contentBlocker.controller.configuration.defaultWebsiteDataStore
+                === page.webView.configuration.websiteDataStore)
+    }
+
+    func testMissingBundleRemainsVisibleAsAnError() async {
+        let manager = WebKitContentBlocking(resourceURL: nil)
+        await manager.prepare()
+        XCTAssertNotNil(manager.errorDescription)
+        await manager.prepare()
+        XCTAssertNotNil(manager.errorDescription)
+    }
+
+    // MARK: - Actions - Fixtures
+
+    private func extensionFixture(delay: Int = 100) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("crest-blocker-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let files = [
+            "manifest.json":
+                #"{"manifest_version":3,"name":"Crest blocker fixture","version":"1.0","permissions":["declarativeNetRequest","declarativeNetRequestWithHostAccess","scripting","nativeMessaging"],"host_permissions":["<all_urls>"],"background":{"scripts":["background.js"],"type":"module","persistent":false},"declarative_net_request":{"rule_resources":[{"id":"fixture","enabled":true,"path":"rules.json"}]}}"#,
+            "rules.json":
+                #"[{"id":1,"priority":1,"action":{"type":"block"},"condition":{"urlFilter":"/blocked.js","resourceTypes":["script"]}}]"#,
+            "hide.css": "#ad { display: none !important; }",
+            "background.js": """
+            try {
+              await new Promise(resolve => setTimeout(resolve, \(delay)));
+              await browser.scripting.registerContentScripts([{id:'cosmetics',matches:['<all_urls>'],css:['hide.css'],runAt:'document_start'}]);
+              await browser.runtime.sendNativeMessage('com.pauldavis.crest',{event:'ready'});
+            } catch(error) {
+              await browser.runtime.sendNativeMessage('com.pauldavis.crest',{event:'error',message:String(error)});
+            }
+            """,
         ]
-        let data = try! JSONSerialization.data(withJSONObject: rules)
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    private func contentBlockingSpace(
-        name: String,
-        tab: TabState.Seed
-    ) -> SpaceState.Seed {
-        contentBlockingSpace(name: name, tabs: [tab])
-    }
-
-    private func contentBlockingSpace(
-        name: String,
-        tabs: [TabState.Seed]
-    ) -> SpaceState.Seed {
-        SpaceState.Seed(
-            name: name,
-            symbol: "shield",
-            accent: .indigo,
-            folders: [],
-            tabs: tabs
-        )
-    }
-
-    private func waitForNavigation(
-        after startingCount: Int,
-        on page: BrowserPage
-    ) async throws {
-        for _ in 0..<100 {
-            if page.completedNavigationCount > startingCount { return }
-            try await Task.sleep(for: .milliseconds(50))
+        for (name, contents) in files {
+            try contents.write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
         }
-        XCTFail("Timed out waiting for the local content-blocking document")
-    }
-}
-
-private enum ContentBlockingTestError: Error {
-    case unavailableRuleListStore
-    case navigationTimedOut
-}
-
-/// A rule-list store of its own, so a test never sweeps or reads compiled lists
-/// belonging to the app or to another test.
-@MainActor
-private struct IsolatedRuleListStore {
-    let store: WKContentRuleListStore
-    private let directory: URL
-
-    init() throws {
-        directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "crest-rule-list-store-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        guard let store = WKContentRuleListStore(url: directory) else {
-            throw ContentBlockingTestError.unavailableRuleListStore
-        }
-        self.store = store
+        return directory
     }
 
-    func availableIdentifiers() async -> [String] {
-        await BrowserContentRuleListCompiler.availableIdentifiers(store: store)
-    }
-
-    func remove() {
-        try? FileManager.default.removeItem(at: directory)
-    }
-}
-
-/// A local document with two tracker scripts and a sentinel a reload would wipe,
-/// which is how these tests tell a rule-list swap from a reload.
-@MainActor
-private struct TrackerDocuments {
-    private let directory: URL
-    private let documentURL: URL
-
-    init() throws {
-        directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "crest-content-blocking-swap-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        documentURL = directory.appendingPathComponent("index.html")
-        try Data(
-            #"""
-            <!doctype html><html><body>
-              <p id="status">ready</p>
-              <script src="first-tracker.js"></script>
-              <script src="second-tracker.js"></script>
-            </body></html>
-            """#.utf8
-        ).write(to: documentURL)
-        try Data("window.crestFirstTrackerLoaded = true;".utf8).write(
-            to: directory.appendingPathComponent("first-tracker.js")
-        )
-        try Data("window.crestSecondTrackerLoaded = true;".utf8).write(
-            to: directory.appendingPathComponent("second-tracker.js")
-        )
-    }
-
-    func remove() {
-        try? FileManager.default.removeItem(at: directory)
-    }
-
-    func load(into page: BrowserPage) async throws {
-        let startingCount = page.completedNavigationCount
-        page.webView.loadFileURL(documentURL, allowingReadAccessTo: directory)
+    private func waitUntil(_ predicate: @MainActor () -> Bool) async throws {
         for _ in 0..<200 {
-            if page.completedNavigationCount > startingCount { return }
+            if predicate() { return }
             try await Task.sleep(for: .milliseconds(25))
         }
-        throw ContentBlockingTestError.navigationTimedOut
-    }
-
-    /// Whether each tracker script ran in the document that is loaded now.
-    func trackerState(in page: BrowserPage) async throws -> [Bool] {
-        [
-            try await boolean("window.crestFirstTrackerLoaded === true", in: page),
-            try await boolean("window.crestSecondTrackerLoaded === true", in: page),
-        ]
-    }
-
-    func markSentinel(in page: BrowserPage) async throws {
-        _ = try await page.webView.evaluateJavaScript(
-            "window.crestSentinel = 'kept'; true"
-        )
-    }
-
-    func hasSentinel(in page: BrowserPage) async throws -> Bool {
-        try await boolean("window.crestSentinel === 'kept'", in: page)
-    }
-
-    private func boolean(_ script: String, in page: BrowserPage) async throws -> Bool {
-        try await page.webView.evaluateJavaScript(script) as? Bool ?? false
-    }
-}
-
-/// Hands out one rule-list generation per request, standing in for the provider
-/// recompiling after a filter-list update.
-@MainActor
-private final class StubContentRuleListProvider: BrowserContentRuleListProviding {
-    private let generations: [[WKContentRuleList]]
-    private var requestCount = 0
-
-    init(generations: [[WKContentRuleList]]) {
-        precondition(!generations.isEmpty)
-        self.generations = generations
-    }
-
-    func balancedRuleLists() async throws -> [WKContentRuleList] {
-        defer { requestCount += 1 }
-        return generations[min(requestCount, generations.count - 1)]
-    }
-}
-
-extension BrowserStore {
-    /// The page WebKit builds from `configuration` for a popup `opener`, a
-    /// tab's page this window opened, offers the core, as a popup WebKit made
-    /// would be, for a test that hosts the page itself. Nil when the core
-    /// refuses it.
-    fileprivate func openWebKitPopup(
-        from opener: WebKitEnginePage, configuration: WKWebViewConfiguration, loading request: URLRequest
-    ) -> (core: CorePage, webKit: WebKitEnginePage)? {
-        guard let popup = opener.offer(WebKitPopup(configuration: configuration), for: request, foreground: false),
-            let opened = core.engines.host(popup.id)
-        else { return nil }
-        return (opened.page, popup)
+        XCTFail("Content blocking did not reach the expected state")
+        throw CocoaError(.coderReadCorrupt)
     }
 }

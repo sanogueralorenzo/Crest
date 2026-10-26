@@ -52,6 +52,15 @@
       "notice": "ThirdParty/DotNet-LICENSE.txt",
       "source": "https://github.com/dotnet/runtime",
       "usedBy": "Crest's core on every platform"
+    },
+    {
+      "identity": "ublock-origin-lite",
+      "name": "uBlock Origin Lite",
+      "version": "2026.1026.1812",
+      "license": "GPL-3.0-or-later, with bundled filter-list and third-party notices",
+      "notice": "CrestShared/Resources/uBlockOriginLite-LICENSE.txt",
+      "source": "https://github.com/uBlockOrigin/uBOL-home",
+      "usedBy": "WebKit content blocking; modified source and dependency notices are preserved in CrestShared/Resources/uBlockOriginLite.zip"
     }
   ],
   "developmentTools": {

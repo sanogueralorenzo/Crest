@@ -70,7 +70,7 @@ final class MobileBrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
     /// The document whole-page translation rewrites.
     var translationDocument: BrowserTranslationDocument? { BrowserTranslationDocument(webView: webView) }
     var readerModeState: BrowserReaderModeState { readerModeSession.state }
-    var isContentBlockingActive: Bool { contentRuleSession.isActive }
+    var isContentBlockingActive: Bool { webKitPage.isContentBlockingActive }
     private(set) var isRequestingDesktopSite = false
     var hasActiveLinkActivationBridge: Bool { linkActivationMessageProxy != nil }
 
@@ -140,7 +140,6 @@ final class MobileBrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
         location: { [weak self] in await self?.geolocationCoordinator?.systemAuthorizes() ?? false },
         notifications: { false })
     @ObservationIgnored let httpAuthenticationSession: BrowserHTTPAuthenticationSession
-    @ObservationIgnored private let contentRuleSession: BrowserPageContentRuleSession
 
     /// False when this page shares the opener's `WKUserContentController`, which
     /// every popup does. Installing the same script message handler twice on it
@@ -150,8 +149,7 @@ final class MobileBrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
     @ObservationIgnored private var hasTemporaryPageZoomOverride = false
 
     /// The page hosting what WebKit's binding built as `webKitPage`, for
-    /// `tab` in `space`. `contentRuleList` is a rule list the page applies
-    /// beside its Space's.
+    /// `tab` in `space`.
     init(
         corePage: CorePage,
         webKitPage: WebKitEnginePage,
@@ -165,7 +163,6 @@ final class MobileBrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
             BrowserGeolocationCoordinator.RecoverSystemAuthorization? = nil,
         serverTrustOverrides: BrowserServerTrustOverrideStore = BrowserServerTrustOverrideStore(),
         mediaSessionStore: BrowserMediaSessionStore? = nil,
-        contentRuleList: WKContentRuleList? = nil,
         defaultPageZoom: CGFloat = BrowserDefaultPageZoomStore.defaultLevel,
         loadsInitialURL: Bool = true,
         linkDestinationHost: BrowserLinkDestinationHost = .unavailable,
@@ -184,10 +181,6 @@ final class MobileBrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
         self.serverTrustOverrides = serverTrustOverrides
         self.linkDestinationHost = linkDestinationHost
         self.openModifiedLink = openModifiedLink
-        contentRuleSession = BrowserPageContentRuleSession(
-            ruleLists: webKitPage.contentRuleLists,
-            additionalRuleList: contentRuleList
-        )
         spaceName = space.settings.name
         navigationContext = BrowserPageNavigationContext(
             tab: tab.state,
@@ -560,13 +553,10 @@ final class MobileBrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
 
     func applyContentBlocking(
         policy: ContentBlockingPolicy,
-        balancedRuleLists: [WKContentRuleList],
-        activation: BrowserContentRuleListActivation = .onNextNavigation
+        activation: BrowserContentBlockingActivation = .onNextNavigation
     ) {
-        contentRuleSession.apply(
+        webKitPage.applyContentBlocking(
             policy: policy,
-            balancedRuleLists: balancedRuleLists,
-            to: webView,
             reloadsImmediately: activation == .immediately && webView.url != nil
         )
     }

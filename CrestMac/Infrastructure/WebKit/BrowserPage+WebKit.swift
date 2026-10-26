@@ -25,7 +25,6 @@ extension BrowserPage {
         spaceID: UUID,
         profileID: UUID,
         spaceName: String,
-        contentRuleList: WKContentRuleList? = nil,
         defaultPageZoom: CGFloat = BrowserDefaultPageZoomStore.defaultLevel,
         openNewTab: @escaping (URL) -> Void,
         openModifiedLink: @escaping (URLRequest, UUID, Bool) -> Void = { _, _, _ in },
@@ -37,7 +36,6 @@ extension BrowserPage {
             corePage: corePage,
             engine: BrowserWebKitPageAdapter(
                 page: webKitPage,
-                contentRuleList: contentRuleList,
                 geolocationService: geolocationService,
                 recoverGeolocationSystemAuthorization: recoverGeolocationSystemAuthorization
             ),
@@ -81,12 +79,10 @@ extension BrowserPage {
 
     func applyContentBlocking(
         policy: ContentBlockingPolicy,
-        balancedRuleLists: [WKContentRuleList],
-        activation: BrowserContentRuleListActivation = .onNextNavigation
+        activation: BrowserContentBlockingActivation = .onNextNavigation
     ) {
         webKitAdapter?.applyContentBlocking(
             policy: policy,
-            balancedRuleLists: balancedRuleLists,
             reloadsImmediately: activation == .immediately && pageEngine.currentURL != nil
         )
     }
